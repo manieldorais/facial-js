@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reconhecimento Facial em Tempo Real</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js/dist/face-api.js"></script> 
+    
+    <style>
+        /* Melhorias de Estilo */
+        body { font-family: sans-serif; text-align: center; padding: 20px; background-color: #f4f4f4; }
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background-color: white; 
+            border-radius: 10px; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1); 
+        }
+        
+        #video-container { 
+            position: relative; 
+            display: inline-block; 
+            margin-top: 20px;
+            /* CHAVE: Limita o container ao tamanho máximo para que o vídeo se ajuste */
+            max-width: 100%; 
+            width: 100%; /* Garante que o container ocupe todo o espaço disponível */
+        }
+        #inputVideo {
+            display: block;
+            /* CHAVE: Faz o vídeo ser responsivo */
+            width: 100%; 
+            height: auto;
+            border: 4px solid #333;
+            border-radius: 8px;
+        }
+        #overlayCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            /* CHAVE: Garante que o canvas se ajuste ao vídeo */
+            width: 100%; 
+            height: 100%; 
+        }
+        #status { 
+            margin-top: 20px; 
+            padding: 15px;
+            font-size: 1.2em; 
+            font-weight: bold; 
+            border-radius: 6px;
+            transition: background-color 0.3s;
+            min-height: 25px; /* Para evitar pulo de tela ao mudar o texto */
+        }
+        #threshold-info { font-size: 0.9em; color: #555; margin-bottom: 15px; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>🎥 Verificação Facial com Câmera</h1>
+
+        <p id="threshold-info">
+            Tolerância de Correspondência (Threshold): 0.6.
+        </p>
+        
+        <div id="video-container">
+            <video id="inputVideo" autoplay muted></video>
+            <canvas id="overlayCanvas"></canvas>
+        </div>
+
+        <div id="status">Iniciando carregamento...</div>
+    </div>
+
+    <script>
+        const video = document.getElementById('inputVideo');
+        const canvas = document.getElementById('overlayCanvas');
+        const statusElement = document.getElementById('status');
+        
+        const DISTANCE_THRESHOLD = 0.6; 
+        let labeledFaceDescriptors = null; 
+        let displaySize;
+        let analysisInterval = null; 
+
+        /**
+         * Carrega os modelos de Machine Learning e processa a imagem de referência.
+         */
+        async function loadModelsAndReference() {
+            // ... (Função inalterada, pois o problema não estava aqui)
+            try {
+                statusElement.innerText = "Carregando modelos de ML...";
+                
+                await faceapi.nets.ssdMobilenetv1.loadFromUri('https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights');
+                await faceapi.nets.faceLandmark68Net.loadFromUri('https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights');
+                await faceapi.nets.faceRecognitionNet.loadFromUri('https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights');
+                
+                statusElement.innerText = "Modelos carregados. Buscando referência (./referencia.jpg)...";
+
+                const referenceImage = await faceapi.fetchImage('./referencia.jpg'); 
+                const referenceDetection = await faceapi.detectSingleFace(referenceImage).withFaceLandmarks().withFaceDescriptor();
+
+                if (!referenceDetection) {
+                    statusElement.innerText = "🚨 Erro: Não detectei face na imagem de referência (referencia.jpg). Verifique o arquivo.";
+                    statusElement.style.backgroundColor = '#ffdddd';
+                    return;
+                }
+
+                labeledFaceDescriptors = new faceapi.FaceMatcher(
+                    new faceapi.LabeledFaceDescriptors('Pessoa Conhecida', [referenceDetection.descriptor]),
+                    DISTANCE_THRESHOLD
+                );
+
+                statusElement.innerText = "Referência pronta. Iniciando câmera...";
+                statusElement.style.backgroundColor = '#ddffdd';
+
+                startVideo();
+
+            } catch (error) {
+                console.error("Erro ao carregar:", error);
+                statusElement.innerText = "🚨 ERRO CRÍTICO: Não foi possível iniciar. Certifique-se de estar rodando em um servidor local.";
+                statusElement.style.backgroundColor = '#ffdddd';
+            }
+        }
+
+        /**
+         * Inicializa o stream de vídeo da câmera.
+         */
+        function startVideo() {
+            // ... (Função inalterada)
+            navigator.mediaDevices.getUserMedia({ video: {} })
+            .then(stream => {
+                video.srcObject = stream;
+            })
+            .catch(err => {
+                console.error("Erro ao acessar a câmera:", err);
+                statusElement.innerText = "🚨 ERRO: Acesso à câmera negado ou indisponível. Permita o acesso e recarregue.";
+                statusElement.style.backgroundColor = '#ffdddd';
+            });
+        }
+        
+        /**
+         * CORREÇÃO PRINCIPAL: Define as dimensões reais do canvas com base no vídeo.
+         */
+        video.addEventListener('loadedmetadata', () => {
+            // 1. Define as dimensões internas do canvas (resolução da câmera) para o face-api.js
+            // Usamos as dimensões nativas do stream para os cálculos internos do face-api,
+            // mas o CSS cuida do redimensionamento visual do elemento.
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+
+            // 2. Define o displaySize para o resizeResults (face-api.js)
+            // Neste ponto, ainda usamos o nativo, mas a correção de responsividade virá no evento 'play'
+            displaySize = { width: video.videoWidth, height: video.videoHeight };
+
+            // O matchDimensions é importante para a correta inicialização do face-api.js
+            faceapi.matchDimensions(canvas, displaySize);
+        });
+
+        // Opcional: Recalcular displaySize e canvas em caso de redimensionamento da janela
+        window.addEventListener('resize', () => {
+            // Se o vídeo estiver tocando e os descritores estiverem prontos
+            if (video.paused === false && labeledFaceDescriptors) {
+                // Atualiza o displaySize com as dimensões ATUAIS do elemento DOM
+                displaySize = { width: video.offsetWidth, height: video.offsetHeight };
+                
+                // Recalcula o dimensionamento do canvas para o face-api.js
+                // Usamos as dimensões do elemento HTML (offsetWidth/offsetHeight) para isso.
+                faceapi.matchDimensions(canvas, displaySize); 
+            }
+        });
+
+
+        /**
+         * Loop principal para detecção e reconhecimento em tempo real.
+         */
+        video.addEventListener('play', () => {
+            if (analysisInterval) {
+                clearInterval(analysisInterval); 
+            }
+            
+            // ATUALIZAÇÃO CHAVE: Redefine displaySize com as dimensões do ELEMENTO visual (DOM)
+            // Isso garante que o redimensionamento do face-api.js (resizeResults) 
+            // mapeie as caixas para o tamanho visível do vídeo na tela, e não para a resolução nativa.
+            displaySize = { width: video.offsetWidth, height: video.offsetHeight };
+            faceapi.matchDimensions(canvas, displaySize);
+            
+            // Inicia o loop de análise (a cada 100ms)
+            analysisInterval = setInterval(async () => {
+                
+                if (!labeledFaceDescriptors || !displaySize || displaySize.width === 0) {
+                    return; 
+                }
+                
+                // 1. Detecção e extração de descritores (baseado na resolução nativa do stream)
+                const detections = await faceapi.detectAllFaces(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+                                                 .withFaceLandmarks()
+                                                 .withFaceDescriptors();
+
+                // 2. Redimensionamento: Mapeia as detecções para o tamanho VISÍVEL do canvas (displaySize)
+                const resizedDetections = faceapi.resizeResults(detections, displaySize);
+                
+                // 3. Limpeza do Canvas
+                canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+
+                // --- 4. Processamento de Reconhecimento ---
+                if (resizedDetections.length > 0) {
+                    resizedDetections.forEach((detection) => {
+                        const bestMatch = labeledFaceDescriptors.findBestMatch(detection.descriptor);
+                        // A caixa já está mapeada para as dimensões visíveis (displaySize)
+                        const box = detection.detection.box; 
+
+                        let resultText = '';
+                        let boxColor = 'red';
+
+                        if (bestMatch.label === 'Pessoa Conhecida' && bestMatch.distance <= DISTANCE_THRESHOLD) {
+                            resultText = `✅ ${bestMatch.label} (${bestMatch.distance.toFixed(2)})`;
+                            boxColor = 'green';
+                            statusElement.innerText = `✅ Match Encontrado! Distância: ${bestMatch.distance.toFixed(3)}`;
+                            statusElement.style.backgroundColor = '#d4edda';
+                            video.pause(); 
+                            // IMPORTANTE: Se pausar, limpa o loop para economizar CPU
+                            if (analysisInterval) {
+                                clearInterval(analysisInterval); 
+                                analysisInterval = null;
+                            }
+                            return; 
+                        } else {
+                            resultText = `❌ Desconhecido (${bestMatch.distance.toFixed(2)})`;
+                            boxColor = 'red';
+                            statusElement.innerText = `❌ Pessoa Não Reconhecida. Distância: ${bestMatch.distance.toFixed(3)}`;
+                            statusElement.style.backgroundColor = '#f8d7da';
+                        }
+                        
+                        // Desenha a caixa delimitadora no canvas
+                        const drawBox = new faceapi.draw.DrawBox(box, { label: resultText, boxColor: boxColor });
+                        // É crucial que o drawBox desenhe no canvas, que agora tem o tamanho correto.
+                        drawBox.draw(canvas);
+                    });
+                } else {
+                    statusElement.innerText = "Procurando faces...";
+                    statusElement.style.backgroundColor = '#fff3cd'; /* Corrigido para amarelo mais claro */
+                }
+
+            }, 100); 
+        });
+
+
+        // PONTO DE INICIALIZAÇÃO SEGURO
+        window.onload = loadModelsAndReference;
+
+    </script>
+
+</body>
+</html>
